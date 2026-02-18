@@ -28,6 +28,24 @@ pip install transformers torch accelerate
 
 ---
 
+## 📊 Benchmarks (Feb 2026)
+
+Gonyai-v1 was tested against sub-1B global models to evaluate its efficiency in handling the Konkani language.
+<img width="1210" height="771" alt="image" src="https://github.com/user-attachments/assets/f1bc5a85-e9e9-4461-9e17-9dce173d39e7" />
+
+| Model | Parameters | Token Efficiency (Lower = Native) | Speed (Tokens/Sec) |
+| :--- | :--- | :--- | :--- |
+| **Gonyai-v1** | **160M** | **5.00** | **65.96** |
+| Qwen2.5-0.5B | 500M | 6.57 | 33.27 |
+| SmolLM2-360M | 360M | 7.85 | 27.00 |
+
+### 🔍 Analysis:
+- **Efficiency:** Gonyai-v1 is **~35% more efficient** at representing Konkani text than Qwen2.5 due to its native tokenizer.
+- **Latency:** It delivers **2x higher throughput** than larger models, making it ideal for edge deployment.
+- **Limitations:** As a 160M base model, it focuses on linguistic fluency over world knowledge. It may hallucinate facts or struggle with complex logic.
+
+---
+
 ## 💻 Usage (Optimized Inference)
 
 For the best poetic and coherent results, use the following configuration. This prevents the model from "drifting" into repetitive or unrelated topics.
@@ -37,49 +55,36 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model_id = "omdeep22/Gonyai-v1"
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # 1. Load Tokenizer and Model
-# trust_remote_code=True is required for the custom KonkanGPT architecture
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 model = AutoModelForCausalLM.from_pretrained(
     model_id, 
     trust_remote_code=True,
     torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
-).to("cuda" if torch.cuda.is_available() else "cpu")
+).to(device)
 
-# 2. Define your prompt using the Chat Template
-messages = [
-    {"role": "user", "content": "गोंयच्या पावसाचेर एक कविता बरोव."}
-]
+# 2. Prepare Prompt (Base Model Format)
+prompt = "गोंयच्या पावसाचेर एक कविता बरोव."
+full_text = f"<|user|>\n{prompt}\n<|assistant|>\n"
 
-tokenized_chat = tokenizer.apply_chat_template(
-    messages, 
-    tokenize=True, 
-    add_generation_prompt=True, 
-    return_tensors="pt"
-).to(model.device)
+# add_token_type_ids=False is critical for this custom architecture
+inputs = tokenizer(full_text, return_tensors="pt", add_token_type_ids=False).to(device)
 
-# 3. Optimized Inference Settings
-outputs = model.generate(
-    tokenized_chat,
-    max_new_tokens=80,          # Recommended for stability
-    temperature=0.3,            # Low temp prevents hallucinations
-    top_k=40,                   # Filters out low-probability noise
-    top_p=0.9,                  # Nucleus sampling for coherence
-    repetition_penalty=1.2,     # Essential for small models to prevent loops
-    do_sample=True,
-    eos_token_id=tokenizer.eos_token_id,
-    pad_token_id=tokenizer.eos_token_id
-)
+# 3. Optimized Generation
+with torch.inference_mode():
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=100,
+        temperature=0.4,           # Balanced for creativity
+        repetition_penalty=1.2,    # Prevents loops in small models
+        do_sample=True,
+        pad_token_id=tokenizer.eos_token_id
+    )
 
-# 4. Decode and clean response
-generated_tokens = outputs[0][tokenized_chat.shape[-1]:]
-response = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-
-# Post-processing: Clean incomplete sentences
-if "।" in response:
-    response = response[:response.rfind("।") + 1]
-
+# 4. Decode
+response = tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True).strip()
 print(f"Assistant: {response}")
 ```
 
